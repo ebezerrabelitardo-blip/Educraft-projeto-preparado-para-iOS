@@ -1,36 +1,76 @@
-# This is a basic workflow to help you get started with Actions
 
-name: CI
+name: Build Educraft IPA
 
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+permissions:
+  contents: read
+
 jobs:
-  # This workflow contains a single job called "build"
   build:
-    # The type of runner that the job will run on
-    runs-on: ubuntu-latest
+    runs-on: macos-14
 
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
+      - name: Baixar arquivos do repositorio
+        uses: actions/checkout@v4
 
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+      - name: Extrair projeto Educraft
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          mkdir -p extracted
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name '*.zip' | head -n 1)
+          if [ -z "$ZIP_FILE" ]; then
+            echo "Nenhum arquivo ZIP encontrado na raiz do repositorio."
+            exit 1
+          fi
+          unzip -q "$ZIP_FILE" -d extracted
+          PACKAGE_FILE=$(find extracted -name package.json -print -quit)
+          if [ -z "$PACKAGE_FILE" ]; then
+            echo "package.json nao encontrado."
+            exit 1
+          fi
+          echo "PROJECT_DIR=$(dirname "$PACKAGE_FILE")" >> "$GITHUB_ENV"
+
+      - name: Instalar dependencias e preparar iOS
+        run: |
+          cd "$PROJECT_DIR"
+          npm install
+          npx cap add ios
+          npx cap sync ios
+
+      - name: Compilar aplicativo iOS
+        run: |
+          cd "$PROJECT_DIR"
+          xcodebuild \
+            -workspace ios/App/App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Empacotar IPA sem assinatura
+        run: |
+          APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/App.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "App.app nao encontrado."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/"
+          cd "$RUNNER_TEMP/ipa"
+          zip -qr "$GITHUB_WORKSPACE/Educraft-unsigned.ipa" Payload
+
+      - name: Disponibilizar IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Educraft-unsigned-IPA
+          path: Educraft-unsigned.ipa
+          if-no-files-found: error
