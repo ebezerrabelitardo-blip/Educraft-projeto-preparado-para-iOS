@@ -1,5 +1,5 @@
 
-name: Build Educraft IPA
+name: Build Educraft IPA.
 
 on:
   workflow_dispatch:
